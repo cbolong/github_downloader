@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -34,22 +37,20 @@ jobs:
           name: GitHubReleaseDownloader
           path: dist/GitHubReleaseDownloader.exe
 
-      - name: Check if VERSION file changed
+      - name: Read version tag
         id: ver
         shell: pwsh
         run: |
-          $changedFiles = git diff-tree --no-commit-id -r --name-only HEAD
-          $isTag = "${{ github.ref }}" -like "refs/tags/v*"
-          if (($changedFiles -contains "VERSION") -or $isTag) {
-            $tag = if ($isTag) { "${{ github.ref_name }}" } else { (Get-Content VERSION -Raw).Trim() }
-            "release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "tag=$tag"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if (Test-Path VERSION) {
+            $tag = (Get-Content VERSION -Raw).Trim()
+          } elseif ("${{ github.ref }}" -like "refs/tags/v*") {
+            $tag = "${{ github.ref_name }}"
           } else {
-            "release=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            $tag = "latest"
           }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Create / update release
-        if: steps.ver.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
@@ -57,7 +58,6 @@ jobs:
           files: dist/GitHubReleaseDownloader.exe
 
       - name: Keep only 3 latest releases
-        if: steps.ver.outputs.release == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -78,6 +78,6 @@ jobs:
               await github.rest.git.deleteRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                ref: `tags/${rel.tag_name}`,
+                ref: "tags/" + rel.tag_name,
               });
             }
