@@ -75,7 +75,12 @@ def get_latest_release(owner: str, repo: str, token: Optional[str] = None) -> di
         raise GitHubError(f"連線 GitHub 失敗：{exc}") from exc
 
     if resp.status_code == 404:
-        raise GitHubError(f"{owner}/{repo} 沒有任何 release（或 repo 不存在）。")
+        # Distinguish "repo not accessible" from "repo exists but no releases".
+        _check_repo_exists(owner, repo, token)
+        raise GitHubError(
+            f"{owner}/{repo} 目前沒有任何 GitHub Release。\n"
+            "（Repo 存在，但尚未在 GitHub 上建立過 Release。）"
+        )
     if resp.status_code == 401:
         raise GitHubError("GitHub Token 無效或權限不足。")
     if resp.status_code == 403 and "rate limit" in resp.text.lower():
@@ -84,3 +89,20 @@ def get_latest_release(owner: str, repo: str, token: Optional[str] = None) -> di
         raise GitHubError(f"GitHub API 錯誤（HTTP {resp.status_code}）。")
 
     return resp.json()
+
+
+def _check_repo_exists(owner: str, repo: str, token: Optional[str]) -> None:
+    """Raise a clear error if the repo itself is not accessible."""
+    try:
+        r = requests.get(
+            f"{API_ROOT}/repos/{owner}/{repo}",
+            headers=_headers(token),
+            timeout=_TIMEOUT,
+        )
+    except requests.RequestException:
+        return  # network issue; let the caller handle
+    if r.status_code == 404:
+        hint = "（若為私人 repo，請先在上方填入有效的 GitHub Token 並按「儲存」。）"
+        raise GitHubError(f"找不到 {owner}/{repo}，或目前 Token 無權存取。\n{hint}")
+    if r.status_code == 401:
+        raise GitHubError("GitHub Token 無效或權限不足，無法存取此 repo。")
