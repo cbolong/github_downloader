@@ -16,7 +16,7 @@ from typing import Callable, List, Optional
 
 from downloader import run_job_download
 from github_api import GitHubError, get_latest_release, parse_repo_url
-from store import Job, load_jobs, save_jobs
+from store import Job, load_jobs, load_settings, save_jobs, save_settings
 
 APP_TITLE = "GitHub Release Downloader"
 
@@ -32,6 +32,7 @@ class App:
 
         self.ui_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self.cards: List["JobCard"] = []
+        self._settings = load_settings()
 
         self._build_top_bar()
         self._build_job_list()
@@ -61,9 +62,12 @@ class App:
             row=1, column=2, sticky="we", padx=4, pady=2)
 
         ttk.Label(top, text="GitHub Token（選填）：").grid(row=2, column=0, sticky="w", pady=2)
-        self.token_var = tk.StringVar(value=os.environ.get("GITHUB_TOKEN", ""))
+        saved_token = self._settings.get("token") or os.environ.get("GITHUB_TOKEN", "")
+        self.token_var = tk.StringVar(value=saved_token)
         ttk.Entry(top, textvariable=self.token_var, show="*").grid(
             row=2, column=1, sticky="we", padx=4, pady=2)
+        ttk.Button(top, text="儲存", command=self._save_token).grid(
+            row=2, column=2, sticky="we", padx=4, pady=2)
 
         top.columnconfigure(1, weight=1)
 
@@ -136,6 +140,11 @@ class App:
     def token(self) -> Optional[str]:
         return self.token_var.get().strip() or None
 
+    def _save_token(self) -> None:
+        self._settings["token"] = self.token_var.get().strip()
+        save_settings(self._settings)
+        messagebox.showinfo(APP_TITLE, "已儲存 Token，下次開啟會自動帶入，所有工作都會使用它。")
+
     # ------------------------------------------------------------ threading
     def submit(self, fn: Callable[[], None]) -> None:
         threading.Thread(target=fn, daemon=True).start()
@@ -190,7 +199,8 @@ class JobCard(ttk.LabelFrame):
         self.progress.grid(row=3, column=0, columnspan=4, sticky="we", pady=(4, 2))
 
         self.status_var = tk.StringVar(value=self.job.status or "")
-        ttk.Label(self, textvariable=self.status_var, foreground="#357").grid(
+        ttk.Label(self, textvariable=self.status_var, foreground="#357",
+                  wraplength=700, justify="left").grid(
             row=4, column=0, columnspan=4, sticky="w")
 
         self.columnconfigure(1, weight=1)
@@ -325,6 +335,13 @@ def _write_crash_log(text: str) -> None:
 
 def main() -> None:
     try:
+        # Use the OS certificate store so HTTPS works in frozen builds even
+        # if certifi's CA bundle is missing or stale.
+        try:
+            import truststore
+            truststore.inject_into_ssl()
+        except Exception:
+            pass
         root = tk.Tk()
         try:
             style = ttk.Style()

@@ -63,3 +63,29 @@ def save_jobs(jobs: List[Job]) -> None:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump([asdict(j) for j in jobs], fh, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+
+
+def _settings_file() -> str:
+    return os.path.join(_config_dir(), "settings.json")
+
+
+def load_settings() -> dict:
+    """Load saved app settings (e.g. the GitHub token), tolerating errors."""
+    path = _settings_file()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(settings: dict) -> None:
+    """Atomically persist app settings as JSON."""
+    path = _settings_file()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)

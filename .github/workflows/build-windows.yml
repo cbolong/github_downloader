@@ -36,6 +36,9 @@ jobs:
           --hidden-import tkinter.filedialog
           --hidden-import tkinter.messagebox
           --collect-all tkinter
+          --collect-all certifi
+          --collect-submodules truststore
+          --hidden-import truststore
           --name GitHubReleaseDownloader
           app.py
 
