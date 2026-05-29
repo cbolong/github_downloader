@@ -36,18 +36,17 @@ jobs:
 
       - name: Check if VERSION file changed
         id: ver
-        shell: bash
+        shell: pwsh
         run: |
-          if git diff-tree --no-commit-id -r --name-only HEAD | grep -q '^VERSION$'; then
-            VERSION=$(cat VERSION | tr -d '[:space:]')
-            echo "release=true"  >> $GITHUB_OUTPUT
-            echo "tag=$VERSION"  >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "release=true"  >> $GITHUB_OUTPUT
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "release=false" >> $GITHUB_OUTPUT
-          fi
+          $changedFiles = git diff-tree --no-commit-id -r --name-only HEAD
+          $isTag = "${{ github.ref }}" -like "refs/tags/v*"
+          if (($changedFiles -contains "VERSION") -or $isTag) {
+            $tag = if ($isTag) { "${{ github.ref_name }}" } else { (Get-Content VERSION -Raw).Trim() }
+            "release=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "tag=$tag"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "release=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
 
       - name: Create / update release
         if: steps.ver.outputs.release == 'true'
