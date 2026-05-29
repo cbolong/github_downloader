@@ -309,18 +309,46 @@ class JobCard(ttk.LabelFrame):
         self.app.remove_card(self)
 
 
-def main() -> None:
-    root = tk.Tk()
+def _write_crash_log(text: str) -> None:
+    """Write startup crash info to Desktop so the user can find it."""
+    import traceback
+    import pathlib
+    desktop = pathlib.Path.home() / "Desktop"
+    if not desktop.exists():
+        desktop = pathlib.Path.home()
+    log = desktop / "GitHubReleaseDownloader_crash.log"
     try:
-        style = ttk.Style()
-        for theme in ("vista", "clam"):
-            if theme in style.theme_names():
-                style.theme_use(theme)
-                break
-    except tk.TclError:
+        log.write_text(text, encoding="utf-8")
+    except Exception:
         pass
-    App(root)
-    root.mainloop()
+
+
+def main() -> None:
+    try:
+        root = tk.Tk()
+        try:
+            style = ttk.Style()
+            for theme in ("vista", "clam"):
+                if theme in style.theme_names():
+                    style.theme_use(theme)
+                    break
+        except tk.TclError:
+            pass
+        App(root)
+        root.mainloop()
+    except Exception:
+        import traceback
+        detail = traceback.format_exc()
+        _write_crash_log(detail)
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror(
+                "GitHubReleaseDownloader — 啟動失敗",
+                f"程式啟動時發生錯誤，詳細記錄已寫到桌面：\n"
+                f"GitHubReleaseDownloader_crash.log\n\n{detail[:600]}",
+            )
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -29,7 +29,15 @@ jobs:
         run: python tests/test_logic.py
 
       - name: Build EXE
-        run: pyinstaller --noconfirm --onefile --windowed --name GitHubReleaseDownloader app.py
+        run: >-
+          pyinstaller --noconfirm --onefile --windowed
+          --hidden-import tkinter
+          --hidden-import tkinter.ttk
+          --hidden-import tkinter.filedialog
+          --hidden-import tkinter.messagebox
+          --collect-all tkinter
+          --name GitHubReleaseDownloader
+          app.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
