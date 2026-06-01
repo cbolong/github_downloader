@@ -106,3 +106,26 @@ def _check_repo_exists(owner: str, repo: str, token: Optional[str]) -> None:
         raise GitHubError(f"找不到 {owner}/{repo}，或目前 Token 無權存取。\n{hint}")
     if r.status_code == 401:
         raise GitHubError("GitHub Token 無效或權限不足，無法存取此 repo。")
+
+
+def get_tag_commit_message(owner: str, repo: str, ref: str,
+                           token: Optional[str] = None) -> str:
+    """Return the title (first line) of the commit a tag/ref points to.
+
+    Best-effort: returns an empty string on any failure so it never blocks
+    showing the release info.
+    """
+    if not ref:
+        return ""
+    try:
+        resp = requests.get(
+            f"{API_ROOT}/repos/{owner}/{repo}/commits/{ref}",
+            headers=_headers(token),
+            timeout=_TIMEOUT,
+        )
+        if not resp.ok:
+            return ""
+        message = (resp.json().get("commit") or {}).get("message", "")
+        return message.strip().splitlines()[0] if message.strip() else ""
+    except (requests.RequestException, ValueError, KeyError):
+        return ""

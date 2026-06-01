@@ -16,6 +16,7 @@ class Job:
     latest_tag: str = ""
     release_name: str = ""
     published_at: str = ""
+    commit_message: str = ""
     status: str = ""
 
     @property

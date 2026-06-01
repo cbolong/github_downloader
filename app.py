@@ -15,7 +15,12 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable, List, Optional
 
 from downloader import run_job_download
-from github_api import GitHubError, get_latest_release, parse_repo_url
+from github_api import (
+    GitHubError,
+    get_latest_release,
+    get_tag_commit_message,
+    parse_repo_url,
+)
 from store import Job, load_jobs, load_settings, save_jobs, save_settings
 
 APP_TITLE = "GitHub Release Downloader"
@@ -177,7 +182,8 @@ class JobCard(ttk.LabelFrame):
 
     def _build(self) -> None:
         self.release_var = tk.StringVar(value=self._release_text())
-        ttk.Label(self, textvariable=self.release_var, foreground="#555").grid(
+        ttk.Label(self, textvariable=self.release_var, foreground="#555",
+                  wraplength=700, justify="left").grid(
             row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
         ttk.Label(self, text="資料夾：").grid(row=1, column=0, sticky="w")
@@ -213,8 +219,11 @@ class JobCard(ttk.LabelFrame):
                 parts.append(self.job.release_name)
             if self.job.published_at:
                 parts.append(self.job.published_at[:10])
-            return "　|　".join(parts)
-        return "尚未取得 release 資訊，請按「重新整理」。"
+            line = "　|　".join(parts)
+            if self.job.commit_message:
+                line += f"\nCommit：{self.job.commit_message}"
+            return line
+        return "尚未取得 release 資訊，請按「重新整理」或直接按「下載」。"
 
     def _on_dest_change(self, *_) -> None:
         self.job.dest_folder = self.dest_var.get()
@@ -235,11 +244,13 @@ class JobCard(ttk.LabelFrame):
         self.status_var.set(text)
         self.job.status = text
 
-    def _apply_release(self, release: dict) -> None:
+    def _apply_release(self, release: dict, commit_message: Optional[str] = None) -> None:
         self._release = release
         self.job.latest_tag = release.get("tag_name", "")
         self.job.release_name = release.get("name") or ""
         self.job.published_at = release.get("published_at") or ""
+        if commit_message is not None:
+            self.job.commit_message = commit_message
         self.release_var.set(self._release_text())
 
     # ----------------------------------------------------------- refresh
@@ -253,21 +264,24 @@ class JobCard(ttk.LabelFrame):
         def work() -> None:
             try:
                 release = get_latest_release(owner, repo, token=token)
+                commit_msg = get_tag_commit_message(
+                    owner, repo, release.get("tag_name", ""), token=token)
             except Exception as exc:
                 msg = str(exc)
-                self.app.post(lambda: self._refresh_done(None, msg))
+                self.app.post(lambda: self._refresh_done(None, None, msg))
                 return
-            self.app.post(lambda: self._refresh_done(release, None))
+            self.app.post(lambda: self._refresh_done(release, commit_msg, None))
 
         self.app.submit(work)
 
-    def _refresh_done(self, release: Optional[dict], error: Optional[str]) -> None:
+    def _refresh_done(self, release: Optional[dict], commit_msg: Optional[str],
+                      error: Optional[str]) -> None:
         self._set_busy(False)
         if error:
             self._status(f"錯誤：{error}")
         else:
             assert release is not None
-            self._apply_release(release)
+            self._apply_release(release, commit_msg)
             self._status("已更新 release 資訊 ✓")
         self.app.persist()
 
@@ -281,9 +295,8 @@ class JobCard(ttk.LabelFrame):
             return
         self._set_busy(True)
         self.progress["value"] = 0
-        self._status("準備下載…")
+        self._status("取得最新 release 中…")
         token, owner, repo = self.app.token(), self.job.owner, self.job.repo
-        cached = self._release
 
         def on_progress(p: int) -> None:
             self.app.post(lambda: self.progress.config(value=p))
@@ -293,8 +306,12 @@ class JobCard(ttk.LabelFrame):
 
         def work() -> None:
             try:
-                release = cached or get_latest_release(owner, repo, token=token)
-                self.app.post(lambda: self._apply_release(release))
+                # Always re-fetch the latest release so the download reflects
+                # the newest tag without needing a separate "重新整理" click.
+                release = get_latest_release(owner, repo, token=token)
+                commit_msg = get_tag_commit_message(
+                    owner, repo, release.get("tag_name", ""), token=token)
+                self.app.post(lambda: self._apply_release(release, commit_msg))
                 run_job_download(release, dest, token=token,
                                  progress_cb=on_progress, log_cb=on_log)
             except Exception as exc:
