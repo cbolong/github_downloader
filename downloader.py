@@ -104,6 +104,49 @@ def extract_zip(zip_path: str, dest_dir: str) -> None:
         zf.extractall(dest_dir)
 
 
+def terminate_if_running(exe_path: str, log_cb: Optional[LogCb] = None) -> None:
+    """If a process is running from exe_path, terminate it before we overwrite.
+
+    Best-effort: never raises, so it cannot block a download.
+    Only acts when the file already exists on disk.
+    Uses psutil for reliable cross-platform process enumeration; if psutil is
+    not installed the function is a silent no-op.
+    """
+    if not os.path.isfile(exe_path):
+        return
+    try:
+        import psutil  # optional dependency; not available in tests on Linux CI
+    except ImportError:
+        return
+
+    abs_path = os.path.abspath(exe_path).lower()
+    for proc in psutil.process_iter(["pid", "exe", "name"]):
+        try:
+            proc_exe = proc.info.get("exe") or ""
+            if not proc_exe:
+                continue
+            if os.path.abspath(proc_exe).lower() != abs_path:
+                continue
+            # Found a matching process.
+            pid = proc.info["pid"]
+            name = proc.info["name"] or "unknown"
+            if log_cb:
+                log_cb(f"偵測到 {name}（PID {pid}）正在執行，正在關閉…")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
+            if log_cb:
+                log_cb("已關閉執行中的程序，繼續下載…")
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            # NoSuchProcess  — process exited between iter and terminate (race)
+            # AccessDenied   — process needs admin rights to kill; skip silently,
+            #                  the download will fail with a clear OS error
+            pass
+
+
 def run_job_download(
     release: dict,
     dest_dir: str,
@@ -136,8 +179,11 @@ def run_job_download(
                 extract_zip(tmp_zip, dest_dir)
             log(f"{prefix}：完成（已解壓）")
         else:
+            target_path = os.path.join(dest_dir, name)
+            if name.lower().endswith(".exe"):
+                terminate_if_running(target_path, log_cb=log_cb)
             log(f"{prefix}：下載中…")
-            download_asset(asset, os.path.join(dest_dir, name), token=token, progress_cb=progress_cb)
+            download_asset(asset, target_path, token=token, progress_cb=progress_cb)
             log(f"{prefix}：完成")
 
     log("全部完成 ✓")

@@ -39,6 +39,8 @@ jobs:
           --collect-all certifi
           --collect-submodules truststore
           --hidden-import truststore
+          --hidden-import psutil
+          --collect-submodules psutil
           --name GitHubReleaseDownloader
           app.py
 
