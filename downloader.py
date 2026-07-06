@@ -28,11 +28,28 @@ def is_source_archive(name: str) -> bool:
 def select_assets(release: dict) -> List[dict]:
     """Pick the assets we should download from a release JSON.
 
-    Uses only the uploaded ``assets`` array, then drops anything that still
-    looks like a source-code archive.
+    Uses only the uploaded ``assets`` array and drops source-code archives,
+    then applies an exe-first priority:
+
+    1. If any ``.exe`` assets exist, download only those (all of them).
+    2. Otherwise, if any ``.zip`` assets exist, download only those.
+    3. Otherwise, download whatever non-source assets remain.
+
+    This matches the intended behaviour: a release that ships both a single
+    ``.exe`` and a ``.zip`` bundle should fetch just the ``.exe``.
     """
     assets = release.get("assets") or []
-    return [a for a in assets if not is_source_archive(a.get("name", ""))]
+    candidates = [a for a in assets if not is_source_archive(a.get("name", ""))]
+
+    exes = [a for a in candidates if a.get("name", "").lower().endswith(".exe")]
+    if exes:
+        return exes
+
+    zips = [a for a in candidates if a.get("name", "").lower().endswith(".zip")]
+    if zips:
+        return zips
+
+    return candidates
 
 
 def _auth_headers(token: Optional[str]) -> dict:

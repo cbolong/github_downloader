@@ -61,9 +61,36 @@ class TestAssetSelection(unittest.TestCase):
         self.assertFalse(is_source_archive("app-windows.exe"))
         self.assertFalse(is_source_archive("release.zip"))
 
-    def test_select_excludes_source_code(self):
+    def test_select_prefers_exe_over_zip(self):
+        # Release has exe + zip + source archives -> only the exe is picked.
         names = [a["name"] for a in select_assets(self._release())]
-        self.assertEqual(names, ["app-windows.exe", "app-bundle.zip"])
+        self.assertEqual(names, ["app-windows.exe"])
+
+    def test_select_multiple_exes_all_downloaded(self):
+        release = {"assets": [
+            {"name": "app-x64.exe", "url": "http://api/1"},
+            {"name": "app-x86.exe", "url": "http://api/2"},
+            {"name": "bundle.zip", "url": "http://api/3"},
+        ]}
+        names = [a["name"] for a in select_assets(release)]
+        self.assertEqual(names, ["app-x64.exe", "app-x86.exe"])
+
+    def test_select_falls_back_to_zip_when_no_exe(self):
+        # ice_connector case: portable.zip + a source archive, no exe.
+        release = {"assets": [
+            {"name": "ice_connector-portable.zip", "url": "http://api/1"},
+            {"name": "Source code (zip)", "url": "http://api/2"},
+        ]}
+        names = [a["name"] for a in select_assets(release)]
+        self.assertEqual(names, ["ice_connector-portable.zip"])
+
+    def test_select_falls_back_to_other_when_no_exe_or_zip(self):
+        release = {"assets": [
+            {"name": "firmware.bin", "url": "http://api/1"},
+            {"name": "notes.txt", "url": "http://api/2"},
+        ]}
+        names = [a["name"] for a in select_assets(release)]
+        self.assertEqual(names, ["firmware.bin", "notes.txt"])
 
     def test_select_empty_when_no_assets(self):
         self.assertEqual(select_assets({"assets": []}), [])
