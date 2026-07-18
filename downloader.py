@@ -6,10 +6,7 @@ import tempfile
 import zipfile
 from typing import Callable, List, Optional
 
-import requests
-
-_TIMEOUT = 30
-_CHUNK = 64 * 1024
+from http_client import CHUNK, TIMEOUT_DOWNLOAD, build_headers, get_session
 
 ProgressCb = Callable[[int], None]  # percent 0-100
 LogCb = Callable[[str], None]
@@ -52,24 +49,16 @@ def select_assets(release: dict) -> List[dict]:
     return candidates
 
 
-def _auth_headers(token: Optional[str]) -> dict:
-    headers = {
-        "User-Agent": "github-release-downloader",
-        "Accept": "application/octet-stream",
-    }
-    token = token or os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
 def download_asset(
     asset: dict,
     target_path: str,
     token: Optional[str] = None,
     progress_cb: Optional[ProgressCb] = None,
 ) -> str:
-    """Stream a single asset to ``target_path``, reporting percent progress.
+    """Stream a single asset to ``target_path``, reporting per-file progress.
+
+    ``progress_cb`` receives this file's own 0-100 percentage. Callers that
+    download several assets should aggregate (see ``run_job_download``).
 
     Prefers the API asset URL with ``Accept: application/octet-stream`` (works
     for private repos too); ``requests`` follows the 302 to the CDN and drops
@@ -80,13 +69,14 @@ def download_asset(
         raise RuntimeError(f"資產缺少下載連結：{asset.get('name')}")
 
     os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
-    with requests.get(url, headers=_auth_headers(token), stream=True, timeout=_TIMEOUT) as resp:
+    headers = build_headers(token, for_download=True)
+    with get_session().get(url, headers=headers, stream=True, timeout=TIMEOUT_DOWNLOAD) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         last_pct = -1
         with open(target_path, "wb") as fh:
-            for chunk in resp.iter_content(chunk_size=_CHUNK):
+            for chunk in resp.iter_content(chunk_size=CHUNK):
                 if not chunk:
                     continue
                 fh.write(chunk)
@@ -164,6 +154,26 @@ def terminate_if_running(exe_path: str, log_cb: Optional[LogCb] = None) -> None:
             pass
 
 
+def _make_overall_progress(
+    file_index: int, total_files: int, progress_cb: Optional[ProgressCb]
+) -> Optional[ProgressCb]:
+    """Wrap a per-file 0-100 callback into an overall, monotonic 0-100 one.
+
+    With N files, file ``i`` (0-based) spans the band [i/N, (i+1)/N]. So a
+    per-file percentage ``p`` maps to overall ``(i*100 + p) / N``. This keeps
+    the progress bar advancing smoothly across files instead of resetting to
+    zero on each new file.
+    """
+    if progress_cb is None:
+        return None
+
+    def overall(file_pct: int) -> None:
+        value = int((file_index * 100 + file_pct) / total_files)
+        progress_cb(min(100, max(0, value)))
+
+    return overall
+
+
 def run_job_download(
     release: dict,
     dest_dir: str,
@@ -171,7 +181,11 @@ def run_job_download(
     progress_cb: Optional[ProgressCb] = None,
     log_cb: Optional[LogCb] = None,
 ) -> None:
-    """Download (and extract zips) every non-source asset into ``dest_dir``."""
+    """Download (and extract zips) every selected asset into ``dest_dir``.
+
+    ``progress_cb`` receives the OVERALL progress across all assets (0-100),
+    monotonically non-decreasing, so multi-file downloads show one smooth bar.
+    """
 
     def log(msg: str) -> None:
         if log_cb:
@@ -186,12 +200,13 @@ def run_job_download(
     for idx, asset in enumerate(assets, start=1):
         name = asset.get("name", "asset")
         prefix = f"[{idx}/{count}] {name}"
+        file_progress = _make_overall_progress(idx - 1, count, progress_cb)
 
         if name.lower().endswith(".zip"):
             log(f"{prefix}：下載中…")
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_zip = os.path.join(tmp, name)
-                download_asset(asset, tmp_zip, token=token, progress_cb=progress_cb)
+                download_asset(asset, tmp_zip, token=token, progress_cb=file_progress)
                 log(f"{prefix}：解壓中…")
                 extract_zip(tmp_zip, dest_dir)
             log(f"{prefix}：完成（已解壓）")
@@ -200,7 +215,9 @@ def run_job_download(
             if name.lower().endswith(".exe"):
                 terminate_if_running(target_path, log_cb=log_cb)
             log(f"{prefix}：下載中…")
-            download_asset(asset, target_path, token=token, progress_cb=progress_cb)
+            download_asset(asset, target_path, token=token, progress_cb=file_progress)
             log(f"{prefix}：完成")
 
+    if progress_cb:
+        progress_cb(100)
     log("全部完成 ✓")

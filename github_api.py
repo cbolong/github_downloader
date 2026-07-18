@@ -1,14 +1,14 @@
 """GitHub REST API helpers: parse repo URLs and fetch the latest release."""
 from __future__ import annotations
 
-import os
 import re
 from typing import Optional, Tuple
 
 import requests
 
+from http_client import TIMEOUT_API, build_headers, get_session
+
 API_ROOT = "https://api.github.com"
-_TIMEOUT = 20
 
 
 class GitHubError(Exception):
@@ -51,18 +51,6 @@ def parse_repo_url(url: str) -> Tuple[str, str]:
     return owner, repo
 
 
-def _headers(token: Optional[str]) -> dict:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "github-release-downloader",
-    }
-    token = token or os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
 def get_latest_release(owner: str, repo: str, token: Optional[str] = None) -> dict:
     """Fetch the latest published (non-draft, non-prerelease) release.
 
@@ -70,7 +58,7 @@ def get_latest_release(owner: str, repo: str, token: Optional[str] = None) -> di
     """
     url = f"{API_ROOT}/repos/{owner}/{repo}/releases/latest"
     try:
-        resp = requests.get(url, headers=_headers(token), timeout=_TIMEOUT)
+        resp = get_session().get(url, headers=build_headers(token), timeout=TIMEOUT_API)
     except requests.RequestException as exc:
         raise GitHubError(f"連線 GitHub 失敗：{exc}") from exc
 
@@ -94,10 +82,10 @@ def get_latest_release(owner: str, repo: str, token: Optional[str] = None) -> di
 def _check_repo_exists(owner: str, repo: str, token: Optional[str]) -> None:
     """Raise a clear error if the repo itself is not accessible."""
     try:
-        r = requests.get(
+        r = get_session().get(
             f"{API_ROOT}/repos/{owner}/{repo}",
-            headers=_headers(token),
-            timeout=_TIMEOUT,
+            headers=build_headers(token),
+            timeout=TIMEOUT_API,
         )
     except requests.RequestException:
         return  # network issue; let the caller handle
@@ -118,10 +106,10 @@ def get_tag_commit_message(owner: str, repo: str, ref: str,
     if not ref:
         return ""
     try:
-        resp = requests.get(
+        resp = get_session().get(
             f"{API_ROOT}/repos/{owner}/{repo}/commits/{ref}",
-            headers=_headers(token),
-            timeout=_TIMEOUT,
+            headers=build_headers(token),
+            timeout=TIMEOUT_API,
         )
         if not resp.ok:
             return ""

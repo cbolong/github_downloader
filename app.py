@@ -97,11 +97,27 @@ class App:
 
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        # Scope wheel scrolling to when the pointer is over the list, so it
+        # does not hijack the wheel globally (safer if other scroll areas are
+        # ever added). Enter/Leave toggle the binding.
+        self.canvas.bind("<Enter>", self._bind_mousewheel)
+        self.canvas.bind("<Leave>", self._unbind_mousewheel)
+
+    def _bind_mousewheel(self, _event=None) -> None:
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)     # Windows / macOS
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)       # Linux up
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)       # Linux down
+
+    def _unbind_mousewheel(self, _event=None) -> None:
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
 
     def _on_mousewheel(self, event) -> None:
-        delta = -1 if getattr(event, "delta", 0) > 0 else 1
-        self.canvas.yview_scroll(delta, "units")
+        if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+            self.canvas.yview_scroll(1, "units")
+        else:
+            self.canvas.yview_scroll(-1, "units")
 
     # -------------------------------------------------------------- actions
     def _browse_dest(self) -> None:
@@ -177,7 +193,6 @@ class JobCard(ttk.LabelFrame):
         self.app = app
         self.job = job
         self._busy = False
-        self._release: Optional[dict] = None
         self._build()
 
     def _build(self) -> None:
@@ -245,7 +260,6 @@ class JobCard(ttk.LabelFrame):
         self.job.status = text
 
     def _apply_release(self, release: dict, commit_message: Optional[str] = None) -> None:
-        self._release = release
         self.job.latest_tag = release.get("tag_name", "")
         self.job.release_name = release.get("name") or ""
         self.job.published_at = release.get("published_at") or ""
@@ -325,6 +339,7 @@ class JobCard(ttk.LabelFrame):
     def _download_done(self, error: Optional[str]) -> None:
         self._set_busy(False)
         if error:
+            self.progress["value"] = 0  # reset so a partial bar doesn't linger
             self._status(f"下載失敗：{error}")
         else:
             self.progress["value"] = 100
