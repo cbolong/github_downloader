@@ -26,7 +26,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Run tests
-        run: python tests/test_logic.py
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Build EXE
         run: >-
