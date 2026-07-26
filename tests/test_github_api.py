@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import github_api  # noqa: E402
 from github_api import (  # noqa: E402
     GitHubError,
+    fetch_release_info,
     get_latest_release,
     get_tag_commit_message,
     parse_repo_url,
@@ -107,6 +108,36 @@ class TestGetLatestReleaseErrorMapping(unittest.TestCase):
         with patcher, self.assertRaises(GitHubError) as ctx:
             get_latest_release("o", "r")
         self.assertIn("500", str(ctx.exception))
+
+
+class TestFetchReleaseInfo(unittest.TestCase):
+    """The shared refresh/download entry point: release + commit title."""
+
+    def test_returns_release_and_commit_title(self):
+        fake = _FakeSession([
+            _FakeResp(200, {"tag_name": "v3", "name": "Build 3"}),
+            _FakeResp(200, {"commit": {"message": "Add feature X\n\nbody"}}),
+        ])
+        with mock.patch.object(github_api, "get_session", return_value=fake):
+            release, commit = fetch_release_info("o", "r")
+        self.assertEqual(release["tag_name"], "v3")
+        self.assertEqual(commit, "Add feature X")
+
+    def test_commit_failure_degrades_to_empty_string(self):
+        fake = _FakeSession([
+            _FakeResp(200, {"tag_name": "v3"}),
+            _FakeResp(404),  # commit lookup fails -> best-effort empty
+        ])
+        with mock.patch.object(github_api, "get_session", return_value=fake):
+            release, commit = fetch_release_info("o", "r")
+        self.assertEqual(release["tag_name"], "v3")
+        self.assertEqual(commit, "")
+
+    def test_release_failure_raises(self):
+        fake = _FakeSession([_FakeResp(404), _FakeResp(404)])  # release + repo check
+        with mock.patch.object(github_api, "get_session", return_value=fake):
+            with self.assertRaises(GitHubError):
+                fetch_release_info("o", "r")
 
 
 class TestGetTagCommitMessage(unittest.TestCase):

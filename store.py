@@ -17,11 +17,31 @@ class Job:
     release_name: str = ""
     published_at: str = ""
     commit_message: str = ""
+    downloaded_tag: str = ""   # tag the user last downloaded (may lag latest_tag)
+    downloaded_at: str = ""    # local time of that download, "YYYY-MM-DD HH:MM"
     status: str = ""
 
     @property
     def full_name(self) -> str:
         return f"{self.owner}/{self.repo}"
+
+
+def version_state(latest_tag: str, downloaded_tag: str) -> str:
+    """Classify a job's update status for display.
+
+    Returns one of:
+      - "never_downloaded": nothing recorded as downloaded yet
+      - "update_available": a newer tag exists on GitHub than what was downloaded
+      - "up_to_date": the downloaded tag matches the latest known tag (or the
+        latest tag is unknown, in which case we can only say what we have)
+
+    Pure function (no I/O) so the UI badge logic is unit-testable.
+    """
+    if not downloaded_tag:
+        return "never_downloaded"
+    if latest_tag and latest_tag != downloaded_tag:
+        return "update_available"
+    return "up_to_date"
 
 
 def _config_dir() -> str:

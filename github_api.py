@@ -96,6 +96,21 @@ def _check_repo_exists(owner: str, repo: str, token: Optional[str]) -> None:
         raise GitHubError("GitHub Token 無效或權限不足，無法存取此 repo。")
 
 
+def fetch_release_info(owner: str, repo: str,
+                       token: Optional[str] = None) -> Tuple[dict, str]:
+    """Fetch the latest release AND its tag's commit title in one call.
+
+    This is the single entry point used by BOTH the refresh and the download
+    flows in the UI, so the two paths can never drift apart. Raises
+    :class:`GitHubError` if the release cannot be fetched; the commit title is
+    best-effort and degrades to an empty string.
+    """
+    release = get_latest_release(owner, repo, token=token)
+    commit_msg = get_tag_commit_message(
+        owner, repo, release.get("tag_name", ""), token=token)
+    return release, commit_msg
+
+
 def get_tag_commit_message(owner: str, repo: str, ref: str,
                            token: Optional[str] = None) -> str:
     """Return the title (first line) of the commit a tag/ref points to.

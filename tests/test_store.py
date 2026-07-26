@@ -10,7 +10,14 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import store  # noqa: E402
-from store import Job, load_jobs, load_settings, save_jobs, save_settings  # noqa: E402
+from store import (  # noqa: E402
+    Job,
+    load_jobs,
+    load_settings,
+    save_jobs,
+    save_settings,
+    version_state,
+)
 
 
 class _TempConfig:
@@ -37,13 +44,36 @@ class TestJobModel(unittest.TestCase):
         j = Job(repo_url="x", owner="o", repo="r")
         self.assertEqual(j.dest_folder, "")
         self.assertEqual(j.commit_message, "")
+        self.assertEqual(j.downloaded_tag, "")
+        self.assertEqual(j.downloaded_at, "")
+
+
+class TestVersionState(unittest.TestCase):
+    """Exhaustive states for the card's downloaded-version badge."""
+
+    def test_never_downloaded(self):
+        self.assertEqual(version_state("v2.0", ""), "never_downloaded")
+        self.assertEqual(version_state("", ""), "never_downloaded")
+
+    def test_update_available(self):
+        self.assertEqual(version_state("v2.0", "v1.0"), "update_available")
+
+    def test_up_to_date_when_tags_match(self):
+        self.assertEqual(version_state("v2.0", "v2.0"), "up_to_date")
+
+    def test_up_to_date_when_latest_unknown(self):
+        # We downloaded something but haven't checked GitHub yet this session:
+        # all we can honestly say is what we have.
+        self.assertEqual(version_state("", "v1.0"), "up_to_date")
 
 
 class TestJobsPersistence(unittest.TestCase):
     def test_round_trip(self):
         with _TempConfig():
             jobs = [
-                Job(repo_url="u1", owner="o1", repo="r1", dest_folder="D:/a", latest_tag="v1"),
+                Job(repo_url="u1", owner="o1", repo="r1", dest_folder="D:/a",
+                    latest_tag="v2", downloaded_tag="v1",
+                    downloaded_at="2026-06-07 10:00"),
                 Job(repo_url="u2", owner="o2", repo="r2"),
             ]
             save_jobs(jobs)
@@ -51,6 +81,8 @@ class TestJobsPersistence(unittest.TestCase):
             self.assertEqual(len(loaded), 2)
             self.assertEqual(loaded[0].owner, "o1")
             self.assertEqual(loaded[0].dest_folder, "D:/a")
+            self.assertEqual(loaded[0].downloaded_tag, "v1")
+            self.assertEqual(loaded[0].downloaded_at, "2026-06-07 10:00")
             self.assertEqual(loaded[1].repo, "r2")
 
     def test_missing_file_returns_empty(self):
@@ -71,7 +103,9 @@ class TestJobsPersistence(unittest.TestCase):
                 json.dump(old, f)
             loaded = load_jobs()
             self.assertEqual(len(loaded), 1)
-            self.assertEqual(loaded[0].commit_message, "")  # defaulted
+            self.assertEqual(loaded[0].commit_message, "")   # defaulted
+            self.assertEqual(loaded[0].downloaded_tag, "")   # defaulted
+            self.assertEqual(loaded[0].downloaded_at, "")    # defaulted
 
     def test_entry_missing_required_keys_is_skipped(self):
         with _TempConfig() as d:

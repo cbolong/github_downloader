@@ -9,19 +9,26 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
+import traceback
+from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, List, Optional
 
 from downloader import run_job_download
-from github_api import (
-    GitHubError,
-    get_latest_release,
-    get_tag_commit_message,
-    parse_repo_url,
+from github_api import GitHubError, fetch_release_info, parse_repo_url
+from store import (
+    Job,
+    load_jobs,
+    load_settings,
+    save_jobs,
+    save_settings,
+    version_state,
 )
-from store import Job, load_jobs, load_settings, save_jobs, save_settings
 
 APP_TITLE = "GitHub Release Downloader"
 
@@ -32,14 +39,21 @@ class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("780x580")
-        self.root.minsize(620, 420)
+        self.root.geometry("820x640")
+        self.root.minsize(640, 440)
 
         self.ui_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self.cards: List["JobCard"] = []
         self._settings = load_settings()
 
+        # A slightly larger bold variant of the default font, used to make the
+        # release tag the visually dominant piece of each card.
+        base_font = tkfont.nametofont("TkDefaultFont")
+        self.bold_font = base_font.copy()
+        self.bold_font.configure(weight="bold", size=base_font.cget("size") + 1)
+
         self._build_top_bar()
+        self._build_toolbar()
         self._build_job_list()
 
         for job in load_jobs():
@@ -75,6 +89,17 @@ class App:
             row=2, column=2, sticky="we", padx=4, pady=2)
 
         top.columnconfigure(1, weight=1)
+
+    def _build_toolbar(self) -> None:
+        bar = ttk.Frame(self.root, padding=(10, 2, 10, 2))
+        bar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(bar, text="追蹤清單", font=self.bold_font).pack(side=tk.LEFT)
+        ttk.Button(bar, text="🔄 全部重新整理", command=self.refresh_all).pack(side=tk.RIGHT)
+
+    def refresh_all(self) -> None:
+        """Refresh every card; cards already busy skip themselves."""
+        for card in list(self.cards):
+            card.refresh()
 
     def _build_job_list(self) -> None:
         container = ttk.Frame(self.root, padding=(10, 0, 10, 10))
@@ -175,13 +200,18 @@ class App:
         self.ui_queue.put(fn)
 
     def _drain_queue(self) -> None:
-        try:
-            while True:
-                self.ui_queue.get_nowait()()
-        except queue.Empty:
-            pass
-        except Exception:
-            pass
+        while True:
+            try:
+                fn = self.ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception:
+                # Never let one bad UI callback kill the drain loop or delay
+                # the callbacks queued after it — but do surface it for
+                # debugging instead of swallowing it silently.
+                traceback.print_exc()
         self.root.after(100, self._drain_queue)
 
 
@@ -196,49 +226,94 @@ class JobCard(ttk.LabelFrame):
         self._build()
 
     def _build(self) -> None:
-        self.release_var = tk.StringVar(value=self._release_text())
-        ttk.Label(self, textvariable=self.release_var, foreground="#555",
-                  wraplength=700, justify="left").grid(
-            row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        # Row 0 — version line: bold tag + secondary "title · date" beside it.
+        ver_row = ttk.Frame(self)
+        ver_row.grid(row=0, column=0, columnspan=4, sticky="w")
+        self.tag_var = tk.StringVar()
+        ttk.Label(ver_row, textvariable=self.tag_var,
+                  font=self.app.bold_font).pack(side=tk.LEFT)
+        self.meta_var = tk.StringVar()
+        ttk.Label(ver_row, textvariable=self.meta_var, foreground="#777").pack(
+            side=tk.LEFT, padx=(8, 0))
 
-        ttk.Label(self, text="資料夾：").grid(row=1, column=0, sticky="w")
+        # Row 1 — commit title of the release tag (secondary info).
+        self.commit_var = tk.StringVar()
+        ttk.Label(self, textvariable=self.commit_var, foreground="#777",
+                  wraplength=700, justify="left").grid(
+            row=1, column=0, columnspan=4, sticky="w")
+
+        # Row 2 — downloaded-version badge: the at-a-glance answer to
+        # "do I already have this?" (colour-coded by state).
+        self.badge_var = tk.StringVar()
+        self.badge_label = ttk.Label(self, textvariable=self.badge_var,
+                                     wraplength=700, justify="left")
+        self.badge_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(2, 6))
+
+        ttk.Label(self, text="資料夾：").grid(row=3, column=0, sticky="w")
         self.dest_var = tk.StringVar(value=self.job.dest_folder)
         self.dest_var.trace_add("write", self._on_dest_change)
         ttk.Entry(self, textvariable=self.dest_var).grid(
-            row=1, column=1, columnspan=2, sticky="we", padx=4)
-        ttk.Button(self, text="瀏覽…", command=self._browse).grid(row=1, column=3, sticky="we")
+            row=3, column=1, columnspan=2, sticky="we", padx=4)
+        ttk.Button(self, text="瀏覽…", command=self._browse).grid(row=3, column=3, sticky="we")
 
         btns = ttk.Frame(self)
-        btns.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 4))
+        btns.grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 4))
         self.refresh_btn = ttk.Button(btns, text="重新整理", command=self.refresh)
         self.refresh_btn.pack(side=tk.LEFT)
         self.download_btn = ttk.Button(btns, text="下載", command=self._on_download)
         self.download_btn.pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text="移除", command=self._on_remove).pack(side=tk.LEFT)
+        ttk.Button(btns, text="開啟資料夾", command=self._open_folder).pack(side=tk.LEFT)
+        ttk.Button(btns, text="移除", command=self._on_remove).pack(side=tk.LEFT, padx=6)
 
         self.progress = ttk.Progressbar(self, mode="determinate", maximum=100)
-        self.progress.grid(row=3, column=0, columnspan=4, sticky="we", pady=(4, 2))
+        self.progress.grid(row=5, column=0, columnspan=4, sticky="we", pady=(4, 2))
 
         self.status_var = tk.StringVar(value=self.job.status or "")
         ttk.Label(self, textvariable=self.status_var, foreground="#357",
                   wraplength=700, justify="left").grid(
-            row=4, column=0, columnspan=4, sticky="w")
+            row=6, column=0, columnspan=4, sticky="w")
 
         self.columnconfigure(1, weight=1)
         self.columnconfigure(2, weight=1)
+        self._refresh_display()
 
-    def _release_text(self) -> str:
-        if self.job.latest_tag:
-            parts = [f"最新 release：{self.job.latest_tag}"]
-            if self.job.release_name and self.job.release_name != self.job.latest_tag:
-                parts.append(self.job.release_name)
-            if self.job.published_at:
-                parts.append(self.job.published_at[:10])
-            line = "　|　".join(parts)
-            if self.job.commit_message:
-                line += f"\nCommit：{self.job.commit_message}"
-            return line
-        return "尚未取得 release 資訊，請按「重新整理」或直接按「下載」。"
+    def _refresh_display(self) -> None:
+        """Recompute EVERY display string on this card from self.job.
+
+        Single source of truth for presentation — called after build, after a
+        release refresh and after a download, so the card can never show a
+        half-updated mixture of old and new info.
+        """
+        job = self.job
+        if job.latest_tag:
+            self.tag_var.set(job.latest_tag)
+            meta = []
+            if job.release_name and job.release_name != job.latest_tag:
+                meta.append(job.release_name)
+            if job.published_at:
+                meta.append(job.published_at[:10])
+            self.meta_var.set("　·　".join(meta))
+            self.commit_var.set(
+                f"Commit：{job.commit_message}" if job.commit_message else "")
+        else:
+            self.tag_var.set("—")
+            self.meta_var.set("尚未取得 release 資訊（按「重新整理」或「下載」）")
+            self.commit_var.set("")
+
+        state = version_state(job.latest_tag, job.downloaded_tag)
+        if state == "never_downloaded":
+            text, color = "尚未下載過", "#777777"
+        elif state == "update_available":
+            text = f"🔔 有新版可下載！（目前已下載：{job.downloaded_tag}）"
+            color = "#e65100"
+        else:  # up_to_date
+            text = f"✔ 已下載最新版（{job.downloaded_tag}"
+            if job.downloaded_at:
+                text += f"，{job.downloaded_at}"
+            text += "）"
+            color = "#2e7d32"
+        self.badge_var.set(text)
+        self.badge_label.config(foreground=color)
 
     def _on_dest_change(self, *_) -> None:
         self.job.dest_folder = self.dest_var.get()
@@ -259,13 +334,33 @@ class JobCard(ttk.LabelFrame):
         self.status_var.set(text)
         self.job.status = text
 
+    def _status_ts(self, text: str) -> None:
+        """Status message prefixed with the current time, so the user can see
+        at a glance how fresh the information is."""
+        self._status(f"{datetime.now().strftime('%H:%M')} {text}")
+
+    def _open_folder(self) -> None:
+        path = self.dest_var.get().strip()
+        if not path or not os.path.isdir(path):
+            messagebox.showwarning(APP_TITLE, "資料夾不存在，請先選擇有效的資料夾。")
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(path)  # noqa: S606 — opening a folder for the user
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"無法開啟資料夾：{exc}")
+
     def _apply_release(self, release: dict, commit_message: Optional[str] = None) -> None:
         self.job.latest_tag = release.get("tag_name", "")
         self.job.release_name = release.get("name") or ""
         self.job.published_at = release.get("published_at") or ""
         if commit_message is not None:
             self.job.commit_message = commit_message
-        self.release_var.set(self._release_text())
+        self._refresh_display()
 
     # ----------------------------------------------------------- refresh
     def refresh(self) -> None:
@@ -277,9 +372,7 @@ class JobCard(ttk.LabelFrame):
 
         def work() -> None:
             try:
-                release = get_latest_release(owner, repo, token=token)
-                commit_msg = get_tag_commit_message(
-                    owner, repo, release.get("tag_name", ""), token=token)
+                release, commit_msg = fetch_release_info(owner, repo, token=token)
             except Exception as exc:
                 msg = str(exc)
                 self.app.post(lambda: self._refresh_done(None, None, msg))
@@ -292,11 +385,11 @@ class JobCard(ttk.LabelFrame):
                       error: Optional[str]) -> None:
         self._set_busy(False)
         if error:
-            self._status(f"錯誤：{error}")
+            self._status_ts(f"錯誤：{error}")
         else:
             assert release is not None
             self._apply_release(release, commit_msg)
-            self._status("已更新 release 資訊 ✓")
+            self._status_ts("已更新 release 資訊 ✓")
         self.app.persist()
 
     # ---------------------------------------------------------- download
@@ -322,9 +415,8 @@ class JobCard(ttk.LabelFrame):
             try:
                 # Always re-fetch the latest release so the download reflects
                 # the newest tag without needing a separate "重新整理" click.
-                release = get_latest_release(owner, repo, token=token)
-                commit_msg = get_tag_commit_message(
-                    owner, repo, release.get("tag_name", ""), token=token)
+                # Same shared helper as refresh() — the two paths cannot drift.
+                release, commit_msg = fetch_release_info(owner, repo, token=token)
                 self.app.post(lambda: self._apply_release(release, commit_msg))
                 run_job_download(release, dest, token=token,
                                  progress_cb=on_progress, log_cb=on_log)
@@ -340,9 +432,15 @@ class JobCard(ttk.LabelFrame):
         self._set_busy(False)
         if error:
             self.progress["value"] = 0  # reset so a partial bar doesn't linger
-            self._status(f"下載失敗：{error}")
+            self._status_ts(f"下載失敗：{error}")
         else:
             self.progress["value"] = 100
+            # Record what we now have on disk, so the badge can answer
+            # "is there something newer than what I've got?" at a glance.
+            self.job.downloaded_tag = self.job.latest_tag
+            self.job.downloaded_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+            self._status_ts(f"下載完成 ✓（{self.job.downloaded_tag}）")
+            self._refresh_display()
         self.app.persist()
 
     def _on_remove(self) -> None:
