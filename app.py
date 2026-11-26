@@ -21,6 +21,7 @@ from typing import Callable, List, Optional
 
 from downloader import run_job_download
 from github_api import GitHubError, fetch_release_info, parse_repo_url
+from http_client import friendly_error
 from store import (
     Job,
     load_jobs,
@@ -31,6 +32,7 @@ from store import (
 )
 
 APP_TITLE = "GitHub Release Downloader"
+REFRESH_ALL_STAGGER_MS = 200  # gap between cards when refreshing everything
 
 
 class App:
@@ -97,9 +99,14 @@ class App:
         ttk.Button(bar, text="🔄 全部重新整理", command=self.refresh_all).pack(side=tk.RIGHT)
 
     def refresh_all(self) -> None:
-        """Refresh every card; cards already busy skip themselves."""
-        for card in list(self.cards):
-            card.refresh()
+        """Refresh every card; cards already busy skip themselves.
+
+        Staggered rather than fired all at once: opening N TLS connections in
+        the same instant is what trips HTTPS-scanning antivirus, corporate
+        firewalls and GitHub's own abuse detection.
+        """
+        for index, card in enumerate(list(self.cards)):
+            self.root.after(index * REFRESH_ALL_STAGGER_MS, card.refresh)
 
     def _build_job_list(self) -> None:
         container = ttk.Frame(self.root, padding=(10, 0, 10, 10))
@@ -374,7 +381,7 @@ class JobCard(ttk.LabelFrame):
             try:
                 release, commit_msg = fetch_release_info(owner, repo, token=token)
             except Exception as exc:
-                msg = str(exc)
+                msg = friendly_error(exc)
                 self.app.post(lambda: self._refresh_done(None, None, msg))
                 return
             self.app.post(lambda: self._refresh_done(release, commit_msg, None))
@@ -421,7 +428,7 @@ class JobCard(ttk.LabelFrame):
                 run_job_download(release, dest, token=token,
                                  progress_cb=on_progress, log_cb=on_log)
             except Exception as exc:
-                msg = str(exc)
+                msg = friendly_error(exc)
                 self.app.post(lambda: self._download_done(msg))
                 return
             self.app.post(lambda: self._download_done(None))

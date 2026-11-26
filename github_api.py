@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import requests
 
-from http_client import TIMEOUT_API, build_headers, get_session
+from http_client import TIMEOUT_API, build_headers, friendly_error, get_session
 
 API_ROOT = "https://api.github.com"
 
@@ -60,7 +60,7 @@ def get_latest_release(owner: str, repo: str, token: Optional[str] = None) -> di
     try:
         resp = get_session().get(url, headers=build_headers(token), timeout=TIMEOUT_API)
     except requests.RequestException as exc:
-        raise GitHubError(f"連線 GitHub 失敗：{exc}") from exc
+        raise GitHubError(friendly_error(exc)) from exc
 
     if resp.status_code == 404:
         # Distinguish "repo not accessible" from "repo exists but no releases".
